@@ -15,31 +15,26 @@ import os, gzip, re
 import pickle, random, time
 import notifier
 
+def natural_key(string_):
+	return [int(s) if s.isdigit() else s for s in re.split(r'(\d+)', string_)]
 
 BASE_SUBTRACT = 20000
 BASE_DIVIDE = 40000
 SAMPLE_SIZE = 1000
 
-#paths now relative
-chrNum = 16
-chrNumString = "chr%d" % chrNum
+output = open("../results/output.txt",'w')
+pvals = []
 
-path1 = "../data/Matrix%dA.int.bed.gz" % chrNum
-f1 = gzip.open(path1, 'r')
-path2 = "../data/Matrix%dB.int.bed.gz" % chrNum
-f2 = gzip.open(path2, 'r')
-
-def load():
-	print "Loading..."
+def load(f1, f2, chrNum):
 
 	hash12 = {}
 	sums1 = {}
 	sums2 = {}
 
 	startt = time.time()
-
+	'''
 	for line in f1:
-		if line.startswith(chrNumString):
+		if line.startswith("chr%s" % chrNum):
 			nums = re.findall('\d+', line)
 			x = (int(nums[1])-BASE_SUBTRACT)/BASE_DIVIDE
 			y = (int(nums[3])-BASE_SUBTRACT)/BASE_DIVIDE
@@ -57,10 +52,10 @@ def load():
 
 			if y not in sums1:
 				sums1[y] = 0
-			sums1[y] += int(nums[4])
+			sums1[y] += int(nums[4])	
 
 	for line in f2:
-		if line.startswith(chrNumString):
+		if line.startswith("chr%s" % chrNum):
 			nums = re.findall('\d+', line)
 			x = (int(nums[1])-BASE_SUBTRACT)/BASE_DIVIDE
 			y = (int(nums[3])-BASE_SUBTRACT)/BASE_DIVIDE
@@ -79,20 +74,15 @@ def load():
 			if y not in sums2:
 				sums2[y] = 0
 			sums2[y] += int(nums[4])
-
+	'''
 	endt = time.time()
-	print ("Loading took %f" % (endt - startt))
+	print ("Loading chromosome %s took %f" % (chrNum,endt - startt))
 
 	pickle.dump(hash12, open("hash12",'wb'))
 	pickle.dump(sums1, open("sums1",'wb'))
 	pickle.dump(sums2, open("sums2",'wb'))
-
-	f1.close()
-	f2.close()
-
-	print "Pickled!"
 	
-def compute():
+def compute(matrixname, chrNum):
 
 	hash12 = pickle.load(open("hash12",'rb'))
 	sums1 = pickle.load(open("sums1",'rb'))
@@ -101,9 +91,8 @@ def compute():
 	p = []
 	sumtime = 0
 
-	print "Computing..."
+	#takes longer each iteration, ask Dr. Ay
 	for x in hash12:
-		# need to check whether x is in sums1 and also sums2 --ferhat
 		if x not in sums1 or x not in sums2:
 			continue
 		startt = time.time()
@@ -113,22 +102,21 @@ def compute():
 		endt = time.time()
 		#print ("Index\t%s\ttime\t%f\tnumberOfTests\t%d" % (x,endt - startt,len(hash12[x])))
 		sumtime += (endt-startt)
-		# uncomment the below line if you want to test things on a few rows only -- ferhat
-		#if x>100: break
-	print ("Total time\t%s" % (sumtime))
 
-	plothist(p, len(p), 'chiHistogram.png')
+	print ("Computing chromsome %s took %s" % (chrNum, sumtime))
 
-def plothist(pvals, count, name):
+	return plothist(p, len(p), matrixname, chrNum)
+
+def plothist(pvals, count, matrixname, chrNum):
 	n, bins = np.histogram(pvals, bins=100)
+	pvals = [1]
 	plt.hist(pvals, bins=100, weights=np.zeros_like(pvals) + 100. / len(pvals))
 	plt.hist(pvals, bins=100, weights=np.zeros_like(pvals) + 100. / len(pvals), histtype='step', cumulative=True)
 
-	plt.title("P-Values for Locus Interactions in " + chrNumString)
+	plt.title("P-Values for Locus Interactions in %s" % matrixname)
 	plt.xlabel("Bins")
 	plt.ylabel("Frequency")
-	plt.show()
-	plt.savefig(name)
+	plt.savefig("../results/plots/%schr%s_plot.png" % (matrixname, chrNum))
 
 	#Compute score
 	total = 0
@@ -136,26 +124,46 @@ def plothist(pvals, count, name):
 	for x in n:
 		total += x
 		score += (.01*(1.0*total/len(pvals)))
-	print "Reproducibiity score is %f" % (1.0-score)
+	print "Reproducibiity score for chromosome %s is %f" % (chrNum, 1.0-score)
+	output.write("Score for chromosome %s is %f \n" % (chrNum, 1.0-score))
+	return (1.0-score)
 
 def main():
-	#inp = raw_input("Reload data? [y/n]: ")
-	#if inp is "y":
-	for file in os.listdir("../data/"):
-		print file
-		#try:
-		#	load()
-		#except Exception as e: #for my OSX notifications
-		#	notifier.promptError("Script failed: loading error",str(e))
-		#else:
-		#	notifier.promptSuccess("Script success!", "No errors")
-	try:
-		compute()
-	except Exception as e:
-		notifier.promptError("Script failed: computation error",str(e))
-	else:
-		notifier.promptSuccess("Script success!", "No errors")
+	files = sorted(os.listdir("../data/"), key=natural_key)
+	for f in files:
+		if f.startswith('.'):
+			files.remove(f) #remove pesky .DS_Store, implement more elegant solution later
+	fileiter = iter(files)
+	
+	for x,y in zip(fileiter, fileiter):
+		scores = []
+		f1 = gzip.open("../data/"+x, 'r')
+		f2 = gzip.open("../data/"+y, 'r')
+		output.write("%s: \n" % x[:-12])
 
+		for i in range(1,23):
+			try:
+				load(f1,f2,i)
+				scores.append(compute(x[:-12], i))
+			except Exception as e: #for my OSX notifications
+				notifier.promptError("Script failed",str(e))
+				quit()
+
+		try:
+			load(f1,f2,"X")
+			scores.append(compute(x[:-12], "X"))
+			load(f1,f2,"Y")
+			scores.append(compute(x[:-12], "Y"))
+		except Exception as e: #for my OSX notifications
+			notifier.promptError("Script failed",str(e))
+			quit()
+
+		output.write("Average reproducibility score is %f \n" % (sum(scores)/len(scores)))
+
+		f1.close()
+		f2.close()
+	
+	notifier.promptSuccess("Script success!", "No errors")
 
 if __name__ == "__main__":
     main()
